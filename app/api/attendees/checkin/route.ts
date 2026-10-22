@@ -22,6 +22,7 @@ export async function POST(request: NextRequest) {
       .eq('id', code)
       .eq('used', false)
       .eq('paid', true)
+      .is('cancelled_at', null)
       .select()
       .maybeSingle()
 
@@ -50,6 +51,17 @@ export async function POST(request: NextRequest) {
     }
 
     const attendee = normalizeAttendee(existing)
+
+    if (attendee.cancelled_at) {
+      return NextResponse.json(
+        {
+          error: 'La compra de esta entrada fue cancelada.',
+          reason: 'cancelled',
+          attendee,
+        },
+        { status: 409 }
+      )
+    }
 
     if (attendee.used) {
       return NextResponse.json(

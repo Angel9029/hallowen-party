@@ -30,12 +30,17 @@ export function normalizeAttendee(row: any): Attendee {
 }
 
 export function normalizeOrder(row: any): Order {
+  // PostgREST puede devolver un objeto o un arreglo de un elemento según la
+  // firma de la función RPC; normalizamos ambos casos.
+  const value = Array.isArray(row) ? row[0] : row
   return {
-    ...row,
-    paid: Boolean(row?.paid),
-    quantity: Number(row?.quantity ?? 0),
-    unit_price: Number(row?.unit_price ?? 0),
-    total: Number(row?.total ?? 0),
+    ...value,
+    paid: Boolean(value?.paid),
+    quantity: Number(value?.quantity ?? 0),
+    unit_price: Number(value?.unit_price ?? 0),
+    total: Number(value?.total ?? 0),
+    cancelled_at: value?.cancelled_at ?? null,
+    cancel_reason: value?.cancel_reason ?? null,
   }
 }
 

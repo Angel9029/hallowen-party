@@ -7,6 +7,8 @@ import {
   roundMoney,
 } from '@/lib/event-settings'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   try {
     const { data, error } = await supabaseAdmin

@@ -25,6 +25,13 @@ export async function POST(request: NextRequest) {
 
     const attendee = normalizeAttendee(data)
 
+    if (attendee.cancelled_at) {
+      return NextResponse.json(
+        { valid: false, reason: 'cancelled', attendee, message: 'Esta compra fue cancelada.' },
+        { status: 200 }
+      )
+    }
+
     if (!attendee.paid) {
       return NextResponse.json({ valid: false, reason: 'not_paid', attendee }, { status: 200 })
     }

@@ -2,25 +2,31 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
-import { Html5Qrcode } from 'html5-qrcode'
 import {
   BadgeCheck,
+  Ban,
   Check,
   CircleDollarSign,
   ClipboardCheck,
   Download,
+  Ghost,
   Home,
   Menu,
+  Moon,
+  PartyPopper,
   Plus,
   QrCode,
-  Search,
-  Ticket,
+  Sparkles,
   Users,
   X,
 } from 'lucide-react'
 import type { Attendee, EventSettings, Result, View } from '@/lib/types'
 import { PurchaseModal } from '@/components/purchase-modal'
+import { Scanner } from '@/components/scanner'
+import { PurchasesList } from '@/components/purchases-list'
+import { CancelOrderModal, EditOrderModal } from '@/components/order-modals'
 import { downloadTicketsPdf, shareTicketsPdf } from '@/lib/ticket-pdf'
+import { groupToOrder, type PurchaseGroup } from '@/lib/purchases'
 
 const FALLBACK_SETTINGS: EventSettings = {
   id: 'default',
@@ -28,25 +34,6 @@ const FALLBACK_SETTINGS: EventSettings = {
   event_date: '2026-10-31',
   price: 5,
   currency: 'S/',
-}
-
-function describeCameraError(error: unknown) {
-  const e = error as { name?: string; message?: string }
-  const name = e?.name || ''
-
-  if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
-    return 'Permiso de cámara bloqueado para este sitio. Pulsa el candado junto a la URL y elige "Permitir", luego recarga. En iPhone: Ajustes > Safari > Cámara > Permitir.'
-  }
-  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-    return 'No se encontró ninguna cámara conectada a este dispositivo.'
-  }
-  if (name === 'NotReadableError' || name === 'TrackStartError') {
-    return 'La cámara está siendo usada por otra aplicación (Zoom, Meet, otra pestaña). Ciérrala y vuelve a intentar.'
-  }
-  if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
-    return 'La cámara disponible no es compatible. Prueba con otra cámara o desde otro navegador.'
-  }
-  return e?.message?.trim() || 'No se pudo iniciar la cámara. Revisa los permisos del sitio e inténtalo de nuevo.'
 }
 
 function formatEventDate(value: string, options: Intl.DateTimeFormatOptions) {
@@ -59,6 +46,8 @@ function formatEventDate(value: string, options: Intl.DateTimeFormatOptions) {
   }
 }
 
+type Notice = { tone: 'success' | 'error'; message: string }
+
 export default function Page() {
   const [view, setView] = useState<View>('inicio')
   const [attendees, setAttendees] = useState<Attendee[]>([])
@@ -66,6 +55,10 @@ export default function Page() {
   const [query, setQuery] = useState('')
   const [showPurchase, setShowPurchase] = useState(false)
   const [selected, setSelected] = useState<Attendee | null>(null)
+  const [editingGroup, setEditingGroup] = useState<PurchaseGroup | null>(null)
+  const [cancellingGroup, setCancellingGroup] = useState<PurchaseGroup | null>(null)
+  const [downloadingKey, setDownloadingKey] = useState<string | null>(null)
+  const [notice, setNotice] = useState<Notice | null>(null)
   const [scanCode, setScanCode] = useState('')
   const [scanResult, setScanResult] = useState<Result>(null)
   const [scanMessage, setScanMessage] = useState<string | null>(null)
@@ -85,7 +78,7 @@ export default function Page() {
       }
       setSetupError(null)
       setAttendees(data.attendees || [])
-    } catch (e) {
+    } catch {
       setSetupError('No se pudo conectar con el servidor.')
     } finally {
       setLoading(false)
@@ -97,8 +90,8 @@ export default function Page() {
       const res = await fetch('/api/settings')
       const data = await res.json()
       if (data.settings) setSettings(data.settings)
-    } catch (e) {
-      // ignore
+    } catch {
+      // Mantiene el precio de respaldo hasta que haya conexión.
     }
   }
 
@@ -107,24 +100,27 @@ export default function Page() {
     fetchSettings()
   }, [])
 
-  const filtered = useMemo(
-    () => attendees.filter((p) => `${p.name} ${p.id}`.toLowerCase().includes(query.toLowerCase())),
-    [attendees, query]
-  )
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(null), 4500)
+    return () => window.clearTimeout(timer)
+  }, [notice])
 
   const stats = useMemo(() => {
-    const total = attendees.length
-    const paid = attendees.filter((p) => p.paid).length
+    const active = attendees.filter((person) => !person.cancelled_at)
+    const total = active.length
+    const paid = active.filter((person) => person.paid).length
     const pending = total - paid
-    const used = attendees.filter((p) => p.used).length
-    const collected = attendees
-      .filter((p) => p.paid)
-      .reduce((sum, p) => sum + Number(p.unit_price ?? settings.price), 0)
-    const pendingAmount = attendees
-      .filter((p) => !p.paid)
-      .reduce((sum, p) => sum + Number(p.unit_price ?? settings.price), 0)
+    const used = active.filter((person) => person.used).length
+    const collected = active
+      .filter((person) => person.paid)
+      .reduce((sum, person) => sum + Number(person.unit_price ?? settings.price), 0)
+    const pendingAmount = active
+      .filter((person) => !person.paid)
+      .reduce((sum, person) => sum + Number(person.unit_price ?? settings.price), 0)
+    const cancelled = attendees.length - active.length
 
-    return { total, paid, pending, used, collected, pendingAmount }
+    return { total, paid, pending, used, collected, pendingAmount, cancelled }
   }, [attendees, settings.price])
 
   const eventDateShort = useMemo(
@@ -141,6 +137,16 @@ export default function Page() {
       }),
     [settings.event_date]
   )
+
+  const orderProgress = useMemo(() => {
+    if (!matchedAttendee?.order_id) return null
+    const tickets = attendees.filter((person) => person.order_id === matchedAttendee.order_id)
+    if (!tickets.length) return null
+    return {
+      used: tickets.filter((ticket) => ticket.used).length,
+      total: tickets.length,
+    }
+  }, [attendees, matchedAttendee])
 
   async function savePrice(price: number) {
     const res = await fetch('/api/settings', {
@@ -175,6 +181,12 @@ export default function Page() {
 
       setMatchedAttendee(data.attendee || null)
 
+      if (data.reason === 'cancelled') {
+        setScanResult('cancelled')
+        setScanMessage('La compra de esta entrada fue cancelada. No es válida para ingresar.')
+        return
+      }
+
       if (data.reason === 'already_used') {
         setScanResult('used')
         setScanMessage('Esta entrada ya fue utilizada y no puede volver a ingresar.')
@@ -195,7 +207,7 @@ export default function Page() {
 
       setScanResult('invalid')
       setScanMessage(data.error || 'No se pudo validar la entrada.')
-    } catch (e) {
+    } catch {
       setScanResult('invalid')
       setMatchedAttendee(null)
       setScanMessage('No se pudo conectar con el servidor.')
@@ -215,7 +227,7 @@ export default function Page() {
       const data = await res.json()
 
       if (data.success && data.attendee) {
-        setAttendees((current) => current.map((p) => (p.id === id ? data.attendee : p)))
+        setAttendees((current) => current.map((person) => (person.id === id ? data.attendee : person)))
         setMatchedAttendee(data.attendee)
         setScanResult('checked')
         setScanMessage('Ingreso registrado. Esta entrada quedó inhabilitada.')
@@ -223,17 +235,56 @@ export default function Page() {
       }
 
       if (data.attendee) {
-        setAttendees((current) => current.map((p) => (p.id === id ? data.attendee : p)))
+        setAttendees((current) => current.map((person) => (person.id === id ? data.attendee : person)))
         setMatchedAttendee(data.attendee)
       }
 
-      setScanResult(data.reason === 'already_used' ? 'used' : 'invalid')
+      setScanResult(
+        data.reason === 'already_used'
+          ? 'used'
+          : data.reason === 'cancelled'
+            ? 'cancelled'
+            : 'invalid'
+      )
       setScanMessage(data.error || 'No se pudo registrar el ingreso.')
-    } catch (e) {
+    } catch {
       setScanMessage('No se pudo conectar con el servidor.')
     } finally {
       setConfirming(false)
     }
+  }
+
+  async function downloadPurchase(group: PurchaseGroup) {
+    setDownloadingKey(group.key)
+    try {
+      await downloadTicketsPdf(group.tickets, settings, groupToOrder(group))
+      setNotice({
+        tone: 'success',
+        message: group.cancelledAt
+          ? 'PDF generado con la marca de agua CANCELADA.'
+          : 'PDF generado con todos los QR de la compra.',
+      })
+    } catch (error: any) {
+      setNotice({ tone: 'error', message: error?.message || 'No se pudo generar el PDF.' })
+    } finally {
+      setDownloadingKey(null)
+    }
+  }
+
+  async function handleEditSaved() {
+    setEditingGroup(null)
+    setNotice({ tone: 'success', message: 'Datos del comprador actualizados. Los QR no cambiaron.' })
+    await fetchAttendees()
+  }
+
+  async function handleCancelled() {
+    setCancellingGroup(null)
+    setSelected(null)
+    setNotice({
+      tone: 'success',
+      message: 'Compra cancelada. Sus QR quedaron inválidos y el PDF llevará la marca CANCELADA.',
+    })
+    await fetchAttendees()
   }
 
   function handleNavClick(nextView: View) {
@@ -247,16 +298,16 @@ export default function Page() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f5f2] text-[#241f2b]">
+    <main className="min-h-screen bg-[#f7f2ea] text-[#241f2b]">
       <div className="mx-auto flex min-h-screen max-w-[1440px]">
-        <aside className="hidden w-[248px] shrink-0 flex-col border-r border-[#e7e0da] bg-white px-5 py-6 lg:flex">
-          <div className="mb-12 flex items-center gap-3 px-2">
-            <div className="grid size-10 place-items-center rounded-xl bg-[#5f2d83] text-white">
-              <Ticket />
+        <aside className="hidden w-[256px] shrink-0 flex-col border-r border-[#30203f] bg-[#1b1226] px-5 py-6 text-[#f6efe7] lg:flex">
+          <div className="mb-10 flex items-center gap-3 px-2">
+            <div className="grid size-11 place-items-center rounded-2xl bg-gradient-to-br from-[#ffb35c] to-[#e8751a] text-[#2a1638] shadow-lg shadow-[#f0a23a]/20">
+              <Ghost className="size-6" />
             </div>
             <div>
-              <p className="font-bold">{settings.event_name}</p>
-              <p className="text-xs text-[#8a808c]">Panel de entradas</p>
+              <p className="font-bold text-white">{settings.event_name}</p>
+              <p className="text-xs text-[#bda9ca]">Panel de entradas</p>
             </div>
           </div>
           <nav className="flex flex-col gap-2" aria-label="Navegación">
@@ -269,19 +320,27 @@ export default function Page() {
 
         {mobileMenuOpen && (
           <div className="fixed inset-0 z-30 lg:hidden">
-            <div className="absolute inset-0 bg-[#241f2b]/40" onClick={() => setMobileMenuOpen(false)} aria-hidden="true" />
-            <aside className="relative flex h-full w-[280px] flex-col border-r border-[#e7e0da] bg-white px-5 py-6 shadow-2xl">
+            <div
+              className="absolute inset-0 bg-[#0b0611]/60 backdrop-blur-sm"
+              onClick={() => setMobileMenuOpen(false)}
+              aria-hidden="true"
+            />
+            <aside className="relative flex h-full w-[286px] flex-col border-r border-[#30203f] bg-[#1b1226] px-5 py-6 text-[#f6efe7] shadow-2xl">
               <div className="mb-8 flex items-center justify-between">
                 <div className="flex items-center gap-3 px-2">
-                  <div className="grid size-10 place-items-center rounded-xl bg-[#5f2d83] text-white">
-                    <Ticket />
+                  <div className="grid size-11 place-items-center rounded-2xl bg-gradient-to-br from-[#ffb35c] to-[#e8751a] text-[#2a1638]">
+                    <Ghost className="size-6" />
                   </div>
                   <div>
-                    <p className="font-bold">{settings.event_name}</p>
-                    <p className="text-xs text-[#8a808c]">Panel de entradas</p>
+                    <p className="font-bold text-white">{settings.event_name}</p>
+                    <p className="text-xs text-[#bda9ca]">Panel de entradas</p>
                   </div>
                 </div>
-                <button onClick={() => setMobileMenuOpen(false)} aria-label="Cerrar menú" className="rounded-lg p-2">
+                <button
+                  onClick={() => setMobileMenuOpen(false)}
+                  aria-label="Cerrar menú"
+                  className="rounded-lg p-2 text-[#d9c9e2] hover:bg-white/10"
+                >
                   <X />
                 </button>
               </div>
@@ -296,9 +355,13 @@ export default function Page() {
         )}
 
         <section className="min-w-0 flex-1">
-          <header className="flex h-[76px] items-center justify-between border-b border-[#e7e0da] bg-white px-5 sm:px-8">
+          <header className="flex h-[76px] items-center justify-between border-b border-[#e7dccd] bg-[#fdfaf5] px-5 sm:px-8">
             <div className="flex items-center gap-3">
-              <button onClick={() => setMobileMenuOpen(true)} className="rounded-lg p-2 lg:hidden" aria-label="Abrir menú">
+              <button
+                onClick={() => setMobileMenuOpen(true)}
+                className="rounded-lg p-2 text-[#5f2d83] hover:bg-[#f0e9f4] lg:hidden"
+                aria-label="Abrir menú"
+              >
                 <Menu />
               </button>
               <div className="hidden lg:block">
@@ -309,7 +372,14 @@ export default function Page() {
               </div>
               <p className="font-bold lg:hidden">{settings.event_name}</p>
             </div>
-            <div className="grid size-9 place-items-center rounded-full bg-[#eadff0] text-sm font-bold text-[#5f2d83]">AD</div>
+            <div className="flex items-center gap-3">
+              <span className="hidden items-center gap-1.5 rounded-full bg-[#f0e9f4] px-3 py-1.5 text-xs font-bold text-[#5f2d83] sm:flex">
+                <Moon className="size-3.5" /> 31 de octubre
+              </span>
+              <div className="grid size-9 place-items-center rounded-full bg-[#f0a23a] text-sm font-bold text-[#2a1638]">
+                AD
+              </div>
+            </div>
           </header>
 
           <div className="p-5 sm:p-8">
@@ -326,30 +396,48 @@ export default function Page() {
                 </p>
               </div>
             )}
-            {loading && view === 'inicio' && <div className="mx-auto max-w-[1120px] text-[#756c78]">Cargando...</div>}
-            {view === 'inicio' && !loading && (
-              <Dashboard stats={stats} settings={settings} onScan={() => setView('escanear')} onPurchase={openPurchase} />
+
+            {loading && view === 'inicio' && (
+              <div className="mx-auto max-w-[1120px] text-[#756c78]">Cargando...</div>
             )}
+
+            {view === 'inicio' && !loading && (
+              <Dashboard
+                stats={stats}
+                settings={settings}
+                eventDate={eventDateShort}
+                onScan={() => setView('escanear')}
+                onPurchase={openPurchase}
+              />
+            )}
+
             {view === 'asistentes' && (
-              <Attendees
-                attendees={filtered}
+              <PurchasesList
+                attendees={attendees}
                 settings={settings}
                 query={query}
                 setQuery={setQuery}
                 onPurchase={openPurchase}
                 onQr={setSelected}
+                onEdit={setEditingGroup}
+                onCancel={setCancellingGroup}
+                onDownload={downloadPurchase}
+                downloadingKey={downloadingKey}
               />
             )}
+
             {view === 'escanear' && (
               <Scanner
+                settings={settings}
                 scanCode={scanCode}
                 setScanCode={setScanCode}
                 scanResult={scanResult}
                 scanMessage={scanMessage}
                 matched={matchedAttendee}
                 confirming={confirming}
-                onSubmit={(e) => {
-                  e.preventDefault()
+                orderProgress={orderProgress}
+                onSubmit={(event) => {
+                  event.preventDefault()
                   validateCode()
                 }}
                 onScan={validateCode}
@@ -374,21 +462,84 @@ export default function Page() {
         />
       )}
 
-      {selected && <QrModal person={selected} settings={settings} onClose={() => setSelected(null)} />}
+      {selected && (
+        <QrModal person={selected} settings={settings} onClose={() => setSelected(null)} />
+      )}
+
+      {editingGroup && (
+        <EditOrderModal
+          group={editingGroup}
+          settings={settings}
+          onClose={() => setEditingGroup(null)}
+          onSaved={handleEditSaved}
+        />
+      )}
+
+      {cancellingGroup && (
+        <CancelOrderModal
+          group={cancellingGroup}
+          onClose={() => setCancellingGroup(null)}
+          onCancelled={handleCancelled}
+        />
+      )}
+
+      {notice && (
+        <div className="fixed bottom-5 left-1/2 z-[60] w-[calc(100%-2rem)] max-w-md -translate-x-1/2">
+          <div
+            className={`flex items-start gap-3 rounded-2xl px-4 py-3 text-sm font-semibold text-white shadow-2xl ${
+              notice.tone === 'success' ? 'bg-[#1d5c3b]' : 'bg-[#8f1d1d]'
+            }`}
+            role="status"
+          >
+            <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full bg-white/15">
+              {notice.tone === 'success' ? <Check className="size-3.5" /> : <Ban className="size-3.5" />}
+            </span>
+            <p className="flex-1">{notice.message}</p>
+            <button onClick={() => setNotice(null)} aria-label="Cerrar aviso" className="rounded p-0.5 hover:bg-white/10">
+              <X className="size-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
 
-function NavItem({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
+function NavItem({
+  icon,
+  label,
+  active,
+  onClick,
+}: {
+  icon: React.ReactNode
+  label: string
+  active: boolean
+  onClick: () => void
+}) {
   return (
-    <button onClick={onClick} className={`flex items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold ${active ? 'bg-[#f0e9f4] text-[#5f2d83]' : 'text-[#756c78] hover:bg-[#f7f5f2]'}`}>
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold transition [&>svg]:size-4 ${
+        active
+          ? 'bg-[#3b2452] text-[#ffcf8a] shadow-inner'
+          : 'text-[#c9b9d2] hover:bg-white/5 hover:text-white'
+      }`}
+    >
       {icon}
       {label}
     </button>
   )
 }
 
-function EventCard({ settings, eventDate, onSavePrice }: { settings: EventSettings; eventDate: string; onSavePrice: (price: number) => Promise<void> }) {
+function EventCard({
+  settings,
+  eventDate,
+  onSavePrice,
+}: {
+  settings: EventSettings
+  eventDate: string
+  onSavePrice: (price: number) => Promise<void>
+}) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(settings.price.toFixed(2))
   const [saving, setSaving] = useState(false)
@@ -417,41 +568,50 @@ function EventCard({ settings, eventDate, onSavePrice }: { settings: EventSettin
   }
 
   return (
-    <div className="mt-auto rounded-2xl bg-[#fff4e9] p-4">
+    <div className="mt-auto rounded-2xl border border-white/10 bg-[#2a1838] p-4">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-semibold text-[#a35c27]">Evento</p>
-        <button onClick={() => setEditing((v) => !v)} className="text-xs font-bold text-[#a35c27] underline">
+        <p className="flex items-center gap-1.5 text-xs font-semibold text-[#ffb35c]">
+          <Sparkles className="size-3.5" /> Evento
+        </p>
+        <button
+          onClick={() => setEditing((value) => !value)}
+          className="text-xs font-bold text-[#ffcf8a] underline decoration-[#ffcf8a]/40 underline-offset-2"
+        >
           {editing ? 'Cancelar' : 'Editar precio'}
         </button>
       </div>
-      <p className="mt-1 font-semibold">{eventDate}</p>
+      <p className="mt-1 font-semibold text-white">{eventDate}</p>
 
       {!editing ? (
         <>
-          <p className="text-sm text-[#8a808c]">
+          <p className="text-sm text-[#bda9ca]">
             {settings.currency} {settings.price.toFixed(2)} por entrada
           </p>
-          <p className="mt-2 text-xs text-[#a35c27]">El precio se actualiza sin reiniciar la app.</p>
+          <p className="mt-2 text-xs text-[#9d86ad]">El precio se actualiza sin reiniciar la app.</p>
         </>
       ) : (
         <div className="mt-2 flex flex-col gap-2">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold">{settings.currency}</span>
+            <span className="text-sm font-semibold text-[#ffcf8a]">{settings.currency}</span>
             <input
               type="number"
               min={0}
               step={0.01}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              className="w-full min-w-0 rounded-lg border border-[#e7d6c6] bg-white px-2 py-1.5 text-sm outline-none focus:border-[#5f2d83]"
+              onChange={(event) => setDraft(event.target.value)}
+              className="w-full min-w-0 rounded-lg border border-[#4a315f] bg-[#1b1226] px-2 py-1.5 text-sm text-white outline-none focus:border-[#ffb35c]"
               autoFocus
             />
           </div>
-          <button onClick={save} disabled={saving} className="rounded-lg bg-[#5f2d83] px-3 py-2 text-xs font-bold text-white disabled:opacity-60">
+          <button
+            onClick={save}
+            disabled={saving}
+            className="rounded-lg bg-[#f0a23a] px-3 py-2 text-xs font-bold text-[#2a1638] disabled:opacity-60"
+          >
             {saving ? 'Guardando...' : 'Guardar precio'}
           </button>
-          <p className="text-xs text-[#8a808c]">Se aplica a las próximas ventas.</p>
-          {error && <p className="text-xs font-semibold text-[#a35c27]">{error}</p>}
+          <p className="text-xs text-[#9d86ad]">Se aplica a las próximas ventas.</p>
+          {error && <p className="text-xs font-semibold text-[#ffb4a2]">{error}</p>}
         </div>
       )}
     </div>
@@ -465,71 +625,198 @@ type Stats = {
   used: number
   collected: number
   pendingAmount: number
+  cancelled: number
 }
 
-function Dashboard({ stats, settings, onScan, onPurchase }: { stats: Stats; settings: EventSettings; onScan: () => void; onPurchase: () => void }) {
+function Dashboard({
+  stats,
+  settings,
+  eventDate,
+  onScan,
+  onPurchase,
+}: {
+  stats: Stats
+  settings: EventSettings
+  eventDate: string
+  onScan: () => void
+  onPurchase: () => void
+}) {
   return (
     <div className="mx-auto max-w-[1120px]">
-      <div className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-        <div>
-          <p className="mb-2 inline-flex rounded-full bg-[#fff0df] px-3 py-1 text-xs font-bold text-[#a35c27]">Evento en preparación</p>
-          <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">Todo listo para recibirlos</h2>
-          <p className="mt-2 text-[#756c78]">
-            Vende una o varias entradas y entrega un PDF con todos los QR.
-          </p>
-        </div>
-        <div className="flex gap-3">
-          <button onClick={onScan} className="flex gap-2 rounded-xl border border-[#dcd4cf] bg-white px-4 py-3 text-sm font-bold">
-            <QrCode /> Leer QR
-          </button>
-          <button onClick={onPurchase} className="flex gap-2 rounded-xl bg-[#5f2d83] px-4 py-3 text-sm font-bold text-white">
-            <Plus /> Vender entradas
-          </button>
-        </div>
-      </div>
+      <section className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#2a1638] via-[#3b1d52] to-[#150a20] p-6 text-white shadow-xl sm:p-8">
+        <div className="pointer-events-none absolute -left-16 -top-16 size-56 rounded-full bg-[#f0a23a]/10 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-20 right-0 size-64 rounded-full bg-[#5f2d83]/40 blur-3xl" />
+        <Bat className="absolute left-[46%] top-6 size-8 text-[#ffb35c]/50" />
+        <Bat className="absolute left-[54%] top-16 size-5 text-[#ffb35c]/30" />
+        <Sparkles className="absolute left-[40%] top-12 size-4 text-[#ffd08a]/60" />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Entradas" value={stats.total} note="generadas" icon={<Users />} />
+        <div className="relative grid gap-8 lg:grid-cols-[1.4fr_auto] lg:items-center">
+          <div>
+            <p className="inline-flex items-center gap-2 rounded-full bg-[#f0a23a] px-3 py-1 text-xs font-bold text-[#2a1638]">
+              <PartyPopper className="size-3.5" /> Noche de brujas · {eventDate}
+            </p>
+            <h2 className="mt-4 max-w-xl text-3xl font-bold tracking-tight sm:text-4xl">
+              Todo listo para recibirlos
+            </h2>
+            <p className="mt-2 max-w-lg text-sm text-[#d8c8e2] sm:text-base">
+              Vende una o varias entradas, entrega un PDF con todos los QR y controla el ingreso
+              desde el móvil.
+            </p>
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+              <button
+                onClick={onPurchase}
+                className="flex items-center justify-center gap-2 rounded-xl bg-[#f0a23a] px-4 py-3 text-sm font-bold text-[#2a1638] transition hover:bg-[#ffb35c]"
+              >
+                <Plus className="size-4" /> Vender entradas
+              </button>
+              <button
+                onClick={onScan}
+                className="flex items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10"
+              >
+                <QrCode className="size-4" /> Leer QR
+              </button>
+            </div>
+          </div>
+
+          <PumpkinScene />
+        </div>
+      </section>
+
+      <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat
+          label="Entradas"
+          value={stats.total}
+          note="activas"
+          icon={<Users />}
+          tone="purple"
+        />
         <Stat
           label="Pagadas"
           value={stats.paid}
           note={`${settings.currency} ${stats.collected.toFixed(2)}`}
           icon={<BadgeCheck />}
+          tone="green"
         />
         <Stat
           label="Por cobrar"
           value={stats.pending}
           note={`${settings.currency} ${stats.pendingAmount.toFixed(2)}`}
           icon={<CircleDollarSign />}
+          tone="amber"
         />
-        <Stat label="Ingresaron" value={stats.used} note={`de ${stats.paid}`} icon={<ClipboardCheck />} />
+        <Stat
+          label="Ingresaron"
+          value={stats.used}
+          note={`de ${stats.paid} pagadas`}
+          icon={<ClipboardCheck />}
+          tone="orange"
+        />
       </div>
 
-      <div className="mt-6 rounded-2xl border border-[#e7e0da] bg-white p-6">
-        <h3 className="font-bold">Cómo funciona</h3>
+      {stats.cancelled > 0 && (
+        <p className="mt-3 flex items-center gap-2 text-sm text-[#8a5a5a]">
+          <Ban className="size-4 text-[#9b2c2c]" />
+          {stats.cancelled} {stats.cancelled === 1 ? 'entrada cancelada' : 'entradas canceladas'} no
+          se cuentan en los totales. Puedes verlas en Asistentes.
+        </p>
+      )}
+
+      <div className="mt-6 rounded-3xl border border-[#e7dccd] bg-white p-6 shadow-sm">
+        <h3 className="flex items-center gap-2 font-bold">
+          <Ghost className="size-4 text-[#5f2d83]" /> Cómo funciona
+        </h3>
         <div className="mt-4 grid gap-3 text-sm text-[#756c78] sm:grid-cols-4">
-          <p>
-            <b className="text-[#241f2b]">1.</b> Define el precio del evento.
-          </p>
-          <p>
-            <b className="text-[#241f2b]">2.</b> Vende una o varias entradas.
-          </p>
-          <p>
-            <b className="text-[#241f2b]">3.</b> Descarga el PDF con todos los QR.
-          </p>
-          <p>
-            <b className="text-[#241f2b]">4.</b> Escanea: cada QR se inhabilita al ingresar.
-          </p>
+          <Step n="1">Define el precio del evento.</Step>
+          <Step n="2">Vende una o varias entradas.</Step>
+          <Step n="3">Descarga el PDF con todos los QR.</Step>
+          <Step n="4">Escanea: cada QR se inhabilita al ingresar.</Step>
         </div>
       </div>
     </div>
   )
 }
 
-function Stat({ label, value, note, icon }: { label: string; value: number; note: string; icon: React.ReactNode }) {
+function Step({ n, children }: { n: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-2xl border border-[#e7e0da] bg-white p-5">
-      <div className="mb-5 grid size-10 place-items-center rounded-xl bg-[#f0e9f4] text-[#5f2d83]">{icon}</div>
+    <p className="flex gap-2 rounded-xl bg-[#faf6ef] px-3 py-3">
+      <span className="grid size-5 shrink-0 place-items-center rounded-full bg-[#f0a23a] text-[10px] font-bold text-[#2a1638]">
+        {n}
+      </span>
+      <span>{children}</span>
+    </p>
+  )
+}
+
+function Bat({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 64 32" className={className} fill="currentColor" aria-hidden="true">
+      <path d="M32 12c2.8 0 4.4 2.2 5.3 4.6 3.1-5.2 9-8.5 15.4-8.6-3.7 2.5-5.9 5.8-6.3 9.7 3.6-2.6 7.8-3.4 11.6-2.4-5 2-8.6 5.4-10.7 9.6-3.9-2.4-7.9-3-11.6-1.8-1.2 3.5-2.4 5.2-3.7 6.9-1.3-1.7-2.5-3.4-3.7-6.9-3.7-1.2-7.7-.6-11.6 1.8-2.1-4.2-5.7-7.6-10.7-9.6 3.8-1 8-.2 11.6 2.4-.4-3.9-2.6-7.2-6.3-9.7 6.4.1 12.3 3.4 15.4 8.6C27.6 14.2 29.2 12 32 12z" />
+    </svg>
+  )
+}
+
+function PumpkinScene() {
+  return (
+    <div className="relative mx-auto hidden h-48 w-48 shrink-0 lg:block" aria-hidden="true">
+      <div className="absolute inset-4 rounded-full bg-[#f0a23a]/20 blur-3xl" />
+      <svg viewBox="0 0 200 200" className="relative size-full animate-floaty">
+        <circle cx="154" cy="38" r="18" fill="#f7cd6b" opacity="0.95" />
+        <circle cx="162" cy="31" r="16" fill="#2a1638" />
+        <circle cx="48" cy="32" r="1.6" fill="#ffd08a" />
+        <circle cx="70" cy="22" r="1.1" fill="#ffd08a" opacity="0.8" />
+        <circle cx="104" cy="30" r="1.3" fill="#ffd08a" opacity="0.7" />
+        <path
+          d="M18 52c5-7 12-7 17 0 5-7 12-7 17 0-6 1-11 4-17 10-6-6-11-9-17-10z"
+          fill="#f0a23a"
+          opacity="0.6"
+        />
+        <path
+          d="M118 62c4-5 9-5 13 0 4-5 9-5 13 0-5 1-8 3-13 8-5-5-8-7-13-8z"
+          fill="#f0a23a"
+          opacity="0.35"
+        />
+        <ellipse cx="100" cy="130" rx="44" ry="37" fill="#f08a24" />
+        <ellipse cx="63" cy="130" rx="29" ry="33" fill="#e57a18" />
+        <ellipse cx="137" cy="130" rx="29" ry="33" fill="#e57a18" />
+        <rect x="94" y="82" width="12" height="24" rx="5" fill="#5d7a34" transform="rotate(7 100 94)" />
+        <path d="M88 112l12 14 12-14z" fill="#2a1638" />
+        <path d="M112 118l12-2-5 14z" fill="#2a1638" />
+        <path
+          d="M71 143c9 3 15 8 19 14 4-6 6-6 10 0 4 6 10 3 19-14-11 7-20 9-29 9-9 0-18-2-29-9z"
+          fill="#2a1638"
+          opacity="0.9"
+        />
+        <path d="M88 154c4 3 8 4 12 4s8-1 12-4" stroke="#f7cd6b" strokeWidth="2" fill="none" />
+      </svg>
+    </div>
+  )
+}
+
+function Stat({
+  label,
+  value,
+  note,
+  icon,
+  tone,
+}: {
+  label: string
+  value: number
+  note: string
+  icon: React.ReactNode
+  tone: 'purple' | 'green' | 'amber' | 'orange'
+}) {
+  const tones = {
+    purple: 'bg-[#f0e9f4] text-[#5f2d83]',
+    green: 'bg-[#e5f5eb] text-[#2e8a54]',
+    amber: 'bg-[#fff4d6] text-[#a68300]',
+    orange: 'bg-[#fff0df] text-[#c25a12]',
+  }
+
+  return (
+    <div className="rounded-2xl border border-[#e7dccd] bg-white p-5 shadow-sm">
+      <div className={`mb-5 grid size-10 place-items-center rounded-xl [&>svg]:size-5 ${tones[tone]}`}>
+        {icon}
+      </div>
       <p className="text-sm text-[#8a808c]">{label}</p>
       <div className="mt-1 flex items-baseline gap-2">
         <span className="text-3xl font-bold">{value}</span>
@@ -539,88 +826,47 @@ function Stat({ label, value, note, icon }: { label: string; value: number; note
   )
 }
 
-function Attendees({
-  attendees,
+function QrModal({
+  person,
   settings,
-  query,
-  setQuery,
-  onPurchase,
-  onQr,
+  onClose,
 }: {
-  attendees: Attendee[]
+  person: Attendee
   settings: EventSettings
-  query: string
-  setQuery: (v: string) => void
-  onPurchase: () => void
-  onQr: (p: Attendee) => void
+  onClose: () => void
 }) {
-  return (
-    <div className="mx-auto max-w-[1120px]">
-      <div className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-        <div>
-          <h2 className="text-3xl font-bold">Asistentes</h2>
-          <p className="mt-2 text-[#756c78]">Cada fila es una entrada con su propio QR y validez.</p>
-        </div>
-        <button onClick={onPurchase} className="flex justify-center gap-2 rounded-xl bg-[#5f2d83] px-4 py-3 text-sm font-bold text-white">
-          <Plus /> Vender entradas
-        </button>
-      </div>
-
-      <div className="overflow-hidden rounded-2xl border border-[#e7e0da] bg-white">
-        <div className="border-b border-[#eee8e3] p-4">
-          <div className="flex items-center gap-3 rounded-xl bg-[#f7f5f2] px-4 py-3">
-            <Search className="text-[#8a808c]" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Buscar por nombre o código..."
-              className="w-full bg-transparent text-sm outline-none"
-            />
-          </div>
-        </div>
-
-        {attendees.length === 0 && (
-          <p className="px-5 py-10 text-center text-sm text-[#8a808c]">Todavía no hay entradas registradas.</p>
-        )}
-
-        <div className="divide-y divide-[#eee8e3]">
-          {attendees.map((p) => (
-            <div key={p.id} className="grid gap-3 px-5 py-4 sm:grid-cols-[1fr_130px_120px_110px] sm:items-center">
-              <div>
-                <p className="font-semibold">{p.name}</p>
-                <p className="text-sm text-[#8a808c]">{p.phone || 'Sin teléfono'}</p>
-                <p className="text-xs text-[#8a808c]">
-                  {settings.currency} {Number(p.unit_price ?? settings.price).toFixed(2)}
-                  {p.order_id ? ` · ${p.order_id}` : ''}
-                </p>
-              </div>
-              <span className="text-sm font-semibold text-[#5f2d83]">{p.id}</span>
-              <span className={`w-fit rounded-full px-2.5 py-1 text-xs font-bold ${p.used ? 'bg-[#f0e9f4] text-[#5f2d83]' : p.paid ? 'bg-[#e5f5eb] text-[#2e8a54]' : 'bg-[#fff8d8] text-[#a68300]'}`}>
-                {p.used ? 'Utilizada' : p.paid ? 'Pagada' : 'Pendiente'}
-              </span>
-              <button onClick={() => onQr(p)} className="flex items-center gap-2 text-sm font-bold text-[#5f2d83]">
-                <QrCode /> Ver QR
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function QrModal({ person, settings, onClose }: { person: Attendee; settings: EventSettings; onClose: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
   useEffect(() => {
     if (canvasRef.current && typeof window !== 'undefined') {
-      QRCode.toCanvas(canvasRef.current, person.id, { width: Math.min(260, window.innerWidth - 80), margin: 2 })
+      QRCode.toCanvas(canvasRef.current, person.id, {
+        width: Math.min(260, window.innerWidth - 80),
+        margin: 2,
+      })
     }
   }, [person.id])
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
   const canShare = typeof navigator !== 'undefined' && 'share' in navigator
+  const cancelled = Boolean(person.cancelled_at)
+  const used = Boolean(person.used)
+  const status = cancelled ? 'Cancelada' : used ? 'Utilizada' : person.paid ? 'Pagada' : 'Pendiente'
+  const statusClass = cancelled
+    ? 'bg-[#fdecec] text-[#9b2c2c]'
+    : used
+      ? 'bg-[#f0e9f4] text-[#5f2d83]'
+      : person.paid
+        ? 'bg-[#e5f5eb] text-[#2e8a54]'
+        : 'bg-[#fff8d8] text-[#a68300]'
 
   async function download() {
     setBusy(true)
@@ -649,25 +895,52 @@ function QrModal({ person, settings, onClose }: { person: Attendee; settings: Ev
   }
 
   return (
-    <div className="fixed inset-0 z-40 grid place-items-center bg-[#241f2b]/40 p-4 sm:p-5">
-      <div className="max-h-[90vh] w-full max-w-sm overflow-auto rounded-3xl bg-white p-6 text-center shadow-2xl">
+    <div
+      className="fixed inset-0 z-40 grid place-items-center bg-[#0b0611]/75 p-4 backdrop-blur-sm sm:p-5"
+      onClick={onClose}
+    >
+      <div
+        className="max-h-[90vh] w-full max-w-sm overflow-auto rounded-3xl bg-[#fffdf9] p-6 text-center shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+      >
         <div className="flex justify-end">
-          <button onClick={onClose} aria-label="Cerrar">
-            <X />
+          <button
+            onClick={onClose}
+            aria-label="Cerrar"
+            className="grid size-8 place-items-center rounded-full text-[#756c78] hover:bg-[#faf6ef]"
+          >
+            <X className="size-4" />
           </button>
         </div>
         <p className="text-sm text-[#8a808c]">Entrada de</p>
         <h2 className="break-words text-xl font-bold">{person.name}</h2>
-        <span className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${person.used ? 'bg-[#f0e9f4] text-[#5f2d83]' : person.paid ? 'bg-[#e5f5eb] text-[#2e8a54]' : 'bg-[#fff8d8] text-[#a68300]'}`}>
-          {person.used ? 'Utilizada' : person.paid ? 'Pagada' : 'Pendiente'}
+        <span className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${statusClass}`}>
+          {status}
         </span>
-        <canvas ref={canvasRef} className="mx-auto my-5 max-w-full" aria-label={`Código QR de ${person.name}`} />
+        <canvas
+          ref={canvasRef}
+          className="mx-auto my-5 max-w-full"
+          aria-label={`Código QR de ${person.name}`}
+        />
         <p className="font-bold text-[#5f2d83]">{person.id}</p>
         <p className="mt-1 text-sm text-[#8a808c]">
           {settings.currency} {Number(person.unit_price ?? settings.price).toFixed(2)}
         </p>
         {person.phone && <p className="mt-1 text-sm text-[#8a808c]">{person.phone}</p>}
-        <p className="mt-3 text-sm text-[#8a808c]">Cada QR es de un solo uso y se inhabilita al escanearse.</p>
+        {person.order_id && <p className="mt-1 text-xs text-[#8a808c]">Compra: {person.order_id}</p>}
+
+        {cancelled ? (
+          <div className="mt-3 rounded-xl bg-[#fdecec] px-3 py-2 text-sm text-[#9b2c2c]">
+            <p className="font-bold">Compra cancelada</p>
+            <p className="mt-0.5 text-xs">Este QR no es válido para ingresar.</p>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-[#8a808c]">
+            Cada QR es de un solo uso y se inhabilita al escanearse.
+          </p>
+        )}
 
         <div className="mt-5 flex flex-col gap-2">
           <button
@@ -675,258 +948,19 @@ function QrModal({ person, settings, onClose }: { person: Attendee; settings: Ev
             disabled={busy}
             className="flex w-full justify-center gap-2 rounded-xl bg-[#5f2d83] px-4 py-3 font-bold text-white disabled:opacity-60"
           >
-            <Download /> {busy ? 'Preparando...' : 'Descargar PDF'}
+            <Download className="size-4" /> {busy ? 'Preparando...' : 'Descargar PDF'}
           </button>
           {canShare && (
             <button
               onClick={share}
               disabled={busy}
-              className="flex w-full justify-center gap-2 rounded-xl border border-[#dcd4cf] bg-white px-4 py-3 text-sm font-bold disabled:opacity-60"
+              className="flex w-full justify-center gap-2 rounded-xl border border-[#ded7d1] bg-white px-4 py-3 text-sm font-bold disabled:opacity-60"
             >
-              <QrCode /> Compartir QR
+              <QrCode className="size-4" /> Compartir QR
             </button>
           )}
         </div>
         {message && <p className="mt-3 text-sm font-semibold text-[#5f2d83]">{message}</p>}
-      </div>
-    </div>
-  )
-}
-
-function Scanner({
-  scanCode,
-  setScanCode,
-  scanResult,
-  scanMessage,
-  matched,
-  confirming,
-  onSubmit,
-  onScan,
-  onConfirm,
-  onClear,
-}: {
-  scanCode: string
-  setScanCode: (v: string) => void
-  scanResult: Result
-  scanMessage: string | null
-  matched: Attendee | null
-  confirming: boolean
-  onSubmit: (e: React.FormEvent) => void
-  onScan: (code: string) => void
-  onConfirm: () => void
-  onClear: () => void
-}) {
-  const reader = useRef<Html5Qrcode | null>(null)
-  const starting = useRef(false)
-  const lastScan = useRef<{ code: string; at: number } | null>(null)
-  const resultRef = useRef<Result>(scanResult)
-  const [cameraError, setCameraError] = useState<string | null>(null)
-  const [cameraReady, setCameraReady] = useState(false)
-  const [requested, setRequested] = useState(false)
-
-  useEffect(() => {
-    resultRef.current = scanResult
-  }, [scanResult])
-
-  const stopScanner = async () => {
-    const scanner = reader.current
-    reader.current = null
-    if (!scanner) return
-    try {
-      if (scanner.isScanning) await scanner.stop()
-    } catch {
-      // La cámara pudo haberse cerrado ya.
-    }
-    try {
-      scanner.clear()
-    } catch {
-      // ignore
-    }
-  }
-
-  const startScanner = async () => {
-    if (starting.current) return
-    starting.current = true
-    setCameraError(null)
-    setCameraReady(false)
-    setRequested(true)
-
-    try {
-      // Libera una instancia anterior antes de volver a pedir la cámara.
-      await stopScanner()
-
-      if (typeof window !== 'undefined' && !window.isSecureContext) {
-        throw new Error(
-          'La cámara solo funciona en HTTPS. Abre la URL de Vercel (https://...) o http://localhost; no uses una IP por HTTP.'
-        )
-      }
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error('Este navegador no permite acceder a la cámara.')
-      }
-
-      // El contenedor debe estar visible antes de arrancar el lector.
-      await new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-      )
-
-      const scanner = new Html5Qrcode('qr-reader')
-      reader.current = scanner
-
-      const config = {
-        fps: 10,
-        qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
-          const minEdge = Math.min(viewfinderWidth, viewfinderHeight)
-          const size = Math.floor(minEdge * 0.7)
-          return { width: size, height: size }
-        },
-      }
-
-      const onDecoded = (decoded: string) => {
-        // Mientras hay un resultado en pantalla no seguimos validando el
-        // mismo QR. El operador debe pulsar "Limpiar" para el siguiente.
-        if (resultRef.current) return
-        const now = Date.now()
-        if (lastScan.current && lastScan.current.code === decoded && now - lastScan.current.at < 3000) return
-        lastScan.current = { code: decoded, at: now }
-        onScan(decoded)
-      }
-
-      try {
-        await scanner.start({ facingMode: 'environment' }, config, onDecoded, () => {})
-      } catch (firstError) {
-        // Portátiles o cámaras sin "environment": usa la que exista.
-        await stopScanner()
-        const cameras = await Html5Qrcode.getCameras().catch(() => [])
-        if (!cameras.length) throw firstError
-        const retry = new Html5Qrcode('qr-reader')
-        reader.current = retry
-        await retry.start(cameras[cameras.length - 1].id, config, onDecoded, () => {})
-      }
-
-      setCameraReady(true)
-    } catch (e) {
-      await stopScanner()
-      setCameraError(describeCameraError(e))
-    } finally {
-      starting.current = false
-    }
-  }
-
-  useEffect(() => {
-    return () => {
-      void stopScanner()
-    }
-    // Solo al desmontar.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const panelTone =
-    scanResult === 'valid' || scanResult === 'checked'
-      ? 'bg-[#e5f5eb]'
-      : scanResult === 'used'
-        ? 'bg-[#f0e9f4]'
-        : 'bg-[#fff0df]'
-
-  const resultTitle =
-    scanResult === 'valid'
-      ? 'Entrada válida'
-      : scanResult === 'checked'
-        ? 'Ingreso registrado'
-        : scanResult === 'used'
-          ? 'Entrada ya utilizada'
-          : 'Entrada no válida'
-
-  return (
-    <div className="mx-auto max-w-[880px]">
-      <div className="mb-7">
-        <h2 className="text-3xl font-bold">Control de acceso</h2>
-        <p className="mt-2 text-[#756c78]">Lee el QR con la cámara o escribe el código. Cada entrada se inhabilita al ingresar.</p>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
-        <div className="rounded-2xl bg-[#241f2b] p-6 text-white">
-          <div className="flex items-center justify-between">
-            <h3 className="font-bold">Lector de cámara</h3>
-            <span className={`rounded-full px-3 py-1 text-xs font-bold ${cameraReady ? 'bg-[#315f42]' : cameraError ? 'bg-[#7c2d12]' : requested ? 'bg-[#6b7280]' : 'bg-[#5f2d83]'}`}>
-              {cameraReady ? 'Activo' : cameraError ? 'Error' : requested ? 'Solicitando...' : 'Requiere permiso'}
-            </span>
-          </div>
-
-          {!requested && !cameraReady && (
-            <button onClick={startScanner} className="mt-5 w-full rounded-xl bg-white px-4 py-3 text-sm font-bold text-[#241f2b]">
-              Activar cámara y escanear
-            </button>
-          )}
-
-          <div id="qr-reader" className={`mt-5 overflow-hidden rounded-2xl bg-white text-[#241f2b] [&>video]:w-full [&>video]:h-auto ${requested ? '' : 'hidden'}`} />
-          <p className="mt-4 text-center text-sm text-[#cfc1d5]">
-            {cameraError ? cameraError : cameraReady ? 'Escanea el código QR' : requested ? 'Acepta el permiso de cámara cuando aparezca el diálogo' : 'Pulsa el botón para solicitar acceso a la cámara'}
-          </p>
-
-          {(cameraError || (requested && !cameraReady && !cameraError)) && (
-            <button onClick={startScanner} className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-bold text-[#241f2b]">
-              Solicitar permiso nuevamente
-            </button>
-          )}
-        </div>
-
-        <div className="rounded-2xl border border-[#e7e0da] bg-white p-6">
-          <h3 className="font-bold">Código manual</h3>
-          <form onSubmit={onSubmit} className="mt-5 flex flex-col gap-3">
-            <label className="text-sm font-semibold">
-              Código de entrada
-              <input
-                value={scanCode}
-                onChange={(e) => setScanCode(e.target.value)}
-                placeholder="Ej. HP-0001"
-                className="mt-2 w-full rounded-xl border border-[#ded7d1] px-4 py-3 uppercase outline-none focus:border-[#5f2d83]"
-                inputMode="text"
-                autoCapitalize="characters"
-              />
-            </label>
-            <button className="rounded-xl bg-[#5f2d83] px-4 py-3 font-bold text-white" type="submit">
-              Validar entrada
-            </button>
-          </form>
-
-          {scanResult && (
-            <div className={`mt-6 rounded-2xl p-4 ${panelTone}`}>
-              <p className="font-bold">{resultTitle}</p>
-              {scanMessage && <p className="mt-1 text-sm text-[#756c78]">{scanMessage}</p>}
-              {matched && (
-                <div className="mt-3 space-y-1 text-sm">
-                  <p>
-                    <span className="font-semibold">Invitado:</span> {matched.name}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Código:</span> {matched.id}
-                  </p>
-                  {matched.phone && (
-                    <p>
-                      <span className="font-semibold">Celular:</span> {matched.phone}
-                    </p>
-                  )}
-                  <p>
-                    <span className="font-semibold">Estado:</span>{' '}
-                    {matched.used ? 'Utilizada' : matched.paid ? 'Pagada' : 'Pendiente'}
-                  </p>
-                </div>
-              )}
-              {scanResult === 'valid' && (
-                <button
-                  onClick={onConfirm}
-                  disabled={confirming}
-                  className="mt-3 flex gap-2 rounded-xl bg-[#2e8a54] px-4 py-2 text-sm font-bold text-white disabled:opacity-60"
-                >
-                  <Check /> {confirming ? 'Registrando...' : 'Aceptar ingreso'}
-                </button>
-              )}
-              <button onClick={onClear} className="mt-3 block text-sm font-semibold underline">
-                Limpiar
-              </button>
-            </div>
-          )}
-        </div>
       </div>
     </div>
   )

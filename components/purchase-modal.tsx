@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Check, Download, Plus, QrCode, Ticket, X } from 'lucide-react'
+import { Check, Download, Ghost, Plus, QrCode, Ticket, X } from 'lucide-react'
 import type { Attendee, EventSettings, Order } from '@/lib/types'
 import { downloadTicketsPdf, shareTicketsPdf } from '@/lib/ticket-pdf'
 
@@ -109,224 +109,250 @@ export function PurchaseModal({ settings, onClose, onSaved }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-40 grid place-items-center bg-[#241f2b]/40 p-4 sm:p-5">
-      <div className="max-h-[92vh] w-full max-w-lg overflow-auto rounded-3xl bg-white p-6 shadow-2xl">
-        <div className="mb-6 flex justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-bold">
-              {result ? 'Entradas generadas' : 'Vender entradas'}
-            </h2>
-            <p className="mt-1 text-sm text-[#8a808c]">
-              {result
-                ? 'Cada entrada tiene su propio QR y su propia validez.'
-                : 'Una persona puede comprar una o varias entradas.'}
-            </p>
+    <div
+      className="fixed inset-0 z-40 grid place-items-center bg-[#0b0611]/75 p-4 backdrop-blur-sm sm:p-5"
+      onClick={onClose}
+    >
+      <div
+        className="max-h-[92vh] w-full max-w-lg overflow-auto rounded-3xl bg-[#fffdf9] shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+      >
+        <div className="relative overflow-hidden bg-gradient-to-br from-[#3b1d52] via-[#2a1638] to-[#1b1027] px-6 pb-5 pt-5 text-white">
+          <div className="pointer-events-none absolute -right-8 -top-10 size-36 rounded-full bg-[#f0a23a]/20 blur-2xl" />
+          <div className="relative flex items-start justify-between gap-4">
+            <div>
+              <p className="inline-flex items-center gap-2 rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-[#ffd08a]">
+                <Ghost className="size-3.5" /> Noche de brujas
+              </p>
+              <h2 className="mt-3 text-xl font-bold">
+                {result ? 'Entradas generadas' : 'Vender entradas'}
+              </h2>
+              <p className="mt-1 text-sm text-white/70">
+                {result
+                  ? 'Cada entrada tiene su propio QR y su propia validez.'
+                  : 'Una persona puede comprar una o varias entradas.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Cerrar"
+              className="grid size-9 shrink-0 place-items-center rounded-full bg-white/10 text-white/80 transition hover:bg-white/20"
+            >
+              <X className="size-4" />
+            </button>
           </div>
-          <button type="button" onClick={onClose} aria-label="Cerrar">
-            <X />
-          </button>
         </div>
 
-        {!result && (
-          <form onSubmit={submit} className="flex flex-col gap-4">
-            <label className="text-sm font-semibold">
-              Nombre completo
-              <input
-                required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Ej. Ana López"
-                className="mt-2 w-full rounded-xl border border-[#ded7d1] px-4 py-3 font-normal outline-none focus:border-[#5f2d83]"
-              />
-            </label>
-
-            <label className="text-sm font-semibold">
-              Teléfono <span className="font-normal text-[#8a808c]">(opcional)</span>
-              <input
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="Ej. 987 654 321"
-                inputMode="tel"
-                className="mt-2 w-full rounded-xl border border-[#ded7d1] px-4 py-3 font-normal outline-none focus:border-[#5f2d83]"
-              />
-            </label>
-
-            <div className="grid gap-4 sm:grid-cols-2">
+        <div className="p-5 sm:p-6">
+          {!result && (
+            <form onSubmit={submit} className="flex flex-col gap-4">
               <label className="text-sm font-semibold">
-                Cantidad de entradas
-                <div className="mt-2 flex items-stretch overflow-hidden rounded-xl border border-[#ded7d1]">
-                  <button
-                    type="button"
-                    onClick={() => updateQuantity(quantity - 1)}
-                    className="px-4 text-lg font-bold text-[#5f2d83] disabled:opacity-40"
-                    disabled={quantity <= 1}
-                    aria-label="Quitar una entrada"
-                  >
-                    −
-                  </button>
-                  <input
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={quantity}
-                    onChange={(e) => updateQuantity(Number(e.target.value))}
-                    className="w-full min-w-0 border-x border-[#ded7d1] py-3 text-center font-normal outline-none focus:border-[#5f2d83]"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => updateQuantity(quantity + 1)}
-                    className="px-4 text-lg font-bold text-[#5f2d83] disabled:opacity-40"
-                    disabled={quantity >= 50}
-                    aria-label="Agregar una entrada"
-                  >
-                    +
-                  </button>
-                </div>
-              </label>
-
-              <label className="text-sm font-semibold">
-                Precio por entrada
+                Nombre completo
                 <input
-                  type="number"
-                  min={0}
-                  step={0.01}
-                  value={unitPrice}
-                  onChange={(e) => setUnitPrice(e.target.value)}
-                  className="mt-2 w-full rounded-xl border border-[#ded7d1] px-4 py-3 font-normal outline-none focus:border-[#5f2d83]"
+                  required
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Ej. Ana López"
+                  className="mt-2 w-full rounded-xl border border-[#ded7d1] px-4 py-3 font-normal outline-none transition focus:border-[#5f2d83] focus:ring-4 focus:ring-[#5f2d83]/10"
                 />
               </label>
-            </div>
 
-            <label className="text-sm font-semibold">
-              ¿Pagó?
-              <select
-                value={paid}
-                onChange={(e) => setPaid(e.target.value)}
-                className="mt-2 w-full rounded-xl border border-[#ded7d1] bg-white px-4 py-3 font-normal outline-none focus:border-[#5f2d83]"
-              >
-                <option value="si">Sí, pagado</option>
-                <option value="no">No, pendiente</option>
-              </select>
-            </label>
+              <label className="text-sm font-semibold">
+                Teléfono <span className="font-normal text-[#8a808c]">(opcional)</span>
+                <input
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value)}
+                  placeholder="Ej. 987 654 321"
+                  inputMode="tel"
+                  className="mt-2 w-full rounded-xl border border-[#ded7d1] px-4 py-3 font-normal outline-none transition focus:border-[#5f2d83] focus:ring-4 focus:ring-[#5f2d83]/10"
+                />
+              </label>
 
-            <div className="flex items-center justify-between rounded-2xl bg-[#f7f5f2] px-5 py-4">
-              <span className="text-sm font-semibold text-[#756c78]">
-                Total ({quantity} {quantity === 1 ? 'entrada' : 'entradas'})
-              </span>
-              <span className="text-2xl font-bold text-[#5f2d83]">
-                {settings.currency} {total.toFixed(2)}
-              </span>
-            </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="text-sm font-semibold">
+                  Cantidad de entradas
+                  <div className="mt-2 flex items-stretch overflow-hidden rounded-xl border border-[#ded7d1]">
+                    <button
+                      type="button"
+                      onClick={() => updateQuantity(quantity - 1)}
+                      className="px-4 text-lg font-bold text-[#5f2d83] disabled:opacity-40"
+                      disabled={quantity <= 1}
+                      aria-label="Quitar una entrada"
+                    >
+                      −
+                    </button>
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={quantity}
+                      onChange={(event) => updateQuantity(Number(event.target.value))}
+                      className="w-full min-w-0 border-x border-[#ded7d1] py-3 text-center font-normal outline-none focus:border-[#5f2d83]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => updateQuantity(quantity + 1)}
+                      className="px-4 text-lg font-bold text-[#5f2d83] disabled:opacity-40"
+                      disabled={quantity >= 50}
+                      aria-label="Agregar una entrada"
+                    >
+                      +
+                    </button>
+                  </div>
+                </label>
 
-            <p className="text-xs text-[#8a808c]">
-              El precio ingresado se guarda solo para esta venta. Puedes cambiarlo en cualquier
-              momento desde el panel del evento.
-            </p>
+                <label className="text-sm font-semibold">
+                  Precio por entrada
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={unitPrice}
+                    onChange={(event) => setUnitPrice(event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-[#ded7d1] px-4 py-3 font-normal outline-none transition focus:border-[#5f2d83] focus:ring-4 focus:ring-[#5f2d83]/10"
+                  />
+                </label>
+              </div>
 
-            {error && (
-              <p className="rounded-xl bg-[#fff0df] px-4 py-3 text-sm font-semibold text-[#a35c27]">
-                {error}
+              <label className="text-sm font-semibold">
+                ¿Pagó?
+                <select
+                  value={paid}
+                  onChange={(event) => setPaid(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-[#ded7d1] bg-white px-4 py-3 font-normal outline-none transition focus:border-[#5f2d83] focus:ring-4 focus:ring-[#5f2d83]/10"
+                >
+                  <option value="si">Sí, pagado</option>
+                  <option value="no">No, pendiente</option>
+                </select>
+              </label>
+
+              <div className="flex items-center justify-between rounded-2xl border border-[#f0e0c8] bg-[#fff6e8] px-5 py-4">
+                <span className="text-sm font-semibold text-[#8a6530]">
+                  Total ({quantity} {quantity === 1 ? 'entrada' : 'entradas'})
+                </span>
+                <span className="text-2xl font-bold text-[#5f2d83]">
+                  {settings.currency} {total.toFixed(2)}
+                </span>
+              </div>
+
+              <p className="text-xs text-[#8a808c]">
+                El precio ingresado se guarda solo para esta venta. Puedes cambiarlo en cualquier
+                momento desde el panel del evento.
               </p>
-            )}
 
-            <button
-              className="flex w-full justify-center gap-2 rounded-xl bg-[#5f2d83] px-4 py-3 font-semibold text-white disabled:opacity-60"
-              type="submit"
-              disabled={submitting}
-            >
-              <Plus />
-              {submitting
-                ? 'Generando entradas...'
-                : `Generar ${quantity} ${quantity === 1 ? 'entrada' : 'entradas'}`}
-            </button>
-          </form>
-        )}
+              {error && (
+                <p className="rounded-xl bg-[#fff0df] px-4 py-3 text-sm font-semibold text-[#a35c27]">
+                  {error}
+                </p>
+              )}
 
-        {result && (
-          <div className="flex flex-col gap-4">
-            <div className="rounded-2xl bg-[#f0e9f4] p-5">
-              <div className="flex items-start gap-3">
-                <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#5f2d83] text-white">
-                  <Check />
-                </div>
-                <div>
-                  <p className="font-bold">
-                    {result.order.quantity}{' '}
-                    {result.order.quantity === 1 ? 'entrada generada' : 'entradas generadas'}
-                  </p>
-                  <p className="mt-1 text-sm text-[#756c78]">
-                    Compra {result.order.id} · Total {settings.currency}{' '}
-                    {Number(result.order.total).toFixed(2)}
-                  </p>
-                  <p className="text-sm text-[#756c78]">
-                    {result.order.paid ? 'Pagada' : 'Pendiente de pago'}
-                  </p>
+              <button
+                className="flex w-full justify-center gap-2 rounded-xl bg-[#f0a23a] px-4 py-3 font-bold text-[#2a1638] transition hover:bg-[#ffb35c] disabled:opacity-60"
+                type="submit"
+                disabled={submitting}
+              >
+                <Plus className="size-4" />
+                {submitting
+                  ? 'Generando entradas...'
+                  : `Generar ${quantity} ${quantity === 1 ? 'entrada' : 'entradas'}`}
+              </button>
+            </form>
+          )}
+
+          {result && (
+            <div className="flex flex-col gap-4">
+              <div className="rounded-2xl border border-[#d9eddf] bg-[#eef8f1] p-5">
+                <div className="flex items-start gap-3">
+                  <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#2e8a54] text-white">
+                    <Check className="size-5" />
+                  </div>
+                  <div>
+                    <p className="font-bold">
+                      {result.order.quantity}{' '}
+                      {result.order.quantity === 1 ? 'entrada generada' : 'entradas generadas'}
+                    </p>
+                    <p className="mt-1 text-sm text-[#756c78]">
+                      Compra {result.order.id} · Total {settings.currency}{' '}
+                      {Number(result.order.total).toFixed(2)}
+                    </p>
+                    <p className="text-sm text-[#756c78]">
+                      {result.order.paid ? 'Pagada' : 'Pendiente de pago'}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div className="max-h-48 overflow-auto rounded-2xl border border-[#e7e0da]">
-              {result.tickets.map((ticket) => (
-                <div
-                  key={ticket.id}
-                  className="flex items-center justify-between gap-3 border-b border-[#eee8e3] px-4 py-3 last:border-b-0"
-                >
-                  <div className="flex items-center gap-3">
-                    <QrCode className="size-4 text-[#5f2d83]" />
-                    <div>
-                      <p className="text-sm font-bold text-[#5f2d83]">{ticket.id}</p>
-                      <p className="text-xs text-[#8a808c]">{ticket.name}</p>
-                    </div>
-                  </div>
-                  <span
-                    className={`rounded-full px-2.5 py-1 text-xs font-bold ${
-                      ticket.paid ? 'bg-[#e5f5eb] text-[#2e8a54]' : 'bg-[#fff8d8] text-[#a68300]'
-                    }`}
+              <div className="max-h-48 overflow-auto rounded-2xl border border-[#e7dccd]">
+                {result.tickets.map((ticket) => (
+                  <div
+                    key={ticket.id}
+                    className="flex items-center justify-between gap-3 border-b border-[#eee3d5] px-4 py-3 last:border-b-0"
                   >
-                    {ticket.paid ? 'Válida' : 'Pendiente de pago'}
-                  </span>
-                </div>
-              ))}
-            </div>
+                    <div className="flex items-center gap-3">
+                      <QrCode className="size-4 text-[#5f2d83]" />
+                      <div>
+                        <p className="text-sm font-bold text-[#5f2d83]">{ticket.id}</p>
+                        <p className="text-xs text-[#8a808c]">{ticket.name}</p>
+                      </div>
+                    </div>
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-xs font-bold ${
+                        ticket.paid ? 'bg-[#e5f5eb] text-[#2e8a54]' : 'bg-[#fff8d8] text-[#a68300]'
+                      }`}
+                    >
+                      {ticket.paid ? 'Válida' : 'Pendiente de pago'}
+                    </span>
+                  </div>
+                ))}
+              </div>
 
-            <p className="text-sm text-[#756c78]">
-              Descarga un solo PDF con un QR por página. Cada entrada se inhabilita de forma
-              individual al escanearse por primera vez.
-            </p>
-
-            <button
-              onClick={download}
-              disabled={pdfBusy}
-              className="flex w-full justify-center gap-2 rounded-xl bg-[#5f2d83] px-4 py-3 font-bold text-white disabled:opacity-60"
-            >
-              <Download />
-              {pdfBusy ? 'Preparando PDF...' : 'Descargar PDF con todas las entradas'}
-            </button>
-
-            {canShare && (
-              <button
-                onClick={share}
-                disabled={pdfBusy}
-                className="flex w-full justify-center gap-2 rounded-xl border border-[#dcd4cf] bg-white px-4 py-3 text-sm font-bold disabled:opacity-60"
-              >
-                <Ticket /> Compartir PDF
-              </button>
-            )}
-
-            {pdfMessage && (
-              <p className="rounded-xl bg-[#e5f5eb] px-4 py-3 text-sm font-semibold text-[#2e8a54]">
-                {pdfMessage}
+              <p className="text-sm text-[#756c78]">
+                Descarga un solo PDF con un QR por página. Cada entrada se inhabilita de forma
+                individual al escanearse por primera vez.
               </p>
-            )}
 
-            <button
-              onClick={onClose}
-              className="w-full rounded-xl border border-[#dcd4cf] bg-white px-4 py-3 text-sm font-bold"
-            >
-              Listo
-            </button>
-          </div>
-        )}
+              <button
+                onClick={download}
+                disabled={pdfBusy}
+                className="flex w-full justify-center gap-2 rounded-xl bg-[#5f2d83] px-4 py-3 font-bold text-white transition hover:bg-[#4c2370] disabled:opacity-60"
+              >
+                <Download className="size-4" />
+                {pdfBusy ? 'Preparando PDF...' : 'Descargar PDF con todas las entradas'}
+              </button>
+
+              {canShare && (
+                <button
+                  onClick={share}
+                  disabled={pdfBusy}
+                  className="flex w-full justify-center gap-2 rounded-xl border border-[#ded7d1] bg-white px-4 py-3 text-sm font-bold transition hover:bg-[#faf6ef] disabled:opacity-60"
+                >
+                  <Ticket className="size-4" /> Compartir PDF
+                </button>
+              )}
+
+              {pdfMessage && (
+                <p className="rounded-xl bg-[#e5f5eb] px-4 py-3 text-sm font-semibold text-[#2e8a54]">
+                  {pdfMessage}
+                </p>
+              )}
+
+              <p className="rounded-xl bg-[#faf6ef] px-4 py-3 text-xs text-[#756c78]">
+                Si algo está mal, puedes cancelar la compra desde Asistentes: sus QR quedarán
+                inválidos y podrás vender entradas nuevas.
+              </p>
+
+              <button
+                onClick={onClose}
+                className="w-full rounded-xl border border-[#ded7d1] bg-white px-4 py-3 text-sm font-bold transition hover:bg-[#faf6ef]"
+              >
+                Listo
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

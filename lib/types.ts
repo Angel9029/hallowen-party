@@ -8,6 +8,8 @@ export type Attendee = {
   unit_price?: number
   paid_at?: string | null
   used_at?: string | null
+  cancelled_at?: string | null
+  cancel_reason?: string | null
   created_at?: string
   updated_at?: string
 }
@@ -29,8 +31,10 @@ export type Order = {
   unit_price: number
   total: number
   paid: boolean
+  cancelled_at?: string | null
+  cancel_reason?: string | null
   created_at?: string
 }
 
 export type View = 'inicio' | 'asistentes' | 'escanear'
-export type Result = 'valid' | 'checked' | 'used' | 'invalid' | null
+export type Result = 'valid' | 'checked' | 'used' | 'cancelled' | 'invalid' | null
