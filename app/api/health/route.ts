@@ -32,14 +32,16 @@ export async function GET() {
     )
   }
 
-  const tables: Record<string, { ok: boolean; count?: number; error?: string }> = {}
+  const tables: Record<string, { ok: boolean; rows?: number; error?: string; code?: string }> = {}
 
   for (const table of TABLES) {
-    const { count, error } = await supabaseAdmin
-      .from(table)
-      .select('*', { count: 'exact', head: true })
+    // Ojo: no usar `head: true`. PostgREST responde 404 sin cuerpo a un HEAD
+    // cuando la tabla no existe y supabase-js lo interpreta como éxito vacío.
+    const { data, error, status } = await supabaseAdmin.from(table).select('*').limit(1)
 
-    tables[table] = error ? { ok: false, error: error.message } : { ok: true, count: count ?? 0 }
+    tables[table] = error
+      ? { ok: false, error: error.message, code: error.code || String(status) }
+      : { ok: true, rows: data?.length ?? 0 }
   }
 
   const missing = Object.entries(tables)
