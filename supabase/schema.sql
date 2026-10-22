@@ -161,3 +161,9 @@ CREATE POLICY "Allow service role full access" ON event_settings
   TO service_role
   USING (true)
   WITH CHECK (true);
+
+-- =========================================================
+-- 8. Recargar la cache de PostgREST
+-- =========================================================
+-- Necesario para que la API vea de inmediato las tablas nuevas o cambiadas.
+NOTIFY pgrst, 'reload schema';

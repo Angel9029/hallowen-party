@@ -29,6 +29,44 @@
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY` - Anon key (público)
    - `SUPABASE_SERVICE_ROLE_KEY` - Service role key (secreto, solo server-side)
 
+> Si usas la integración de Vercel con Supabase, no necesitas `.env.local` en
+> producción: Vercel inyecta esas variables. Pero **debes redesplegar** después
+> de añadirlas o cambiarlas.
+
+## Si sale "Could not find the table 'public.attendees'"
+Significa que la app está conectada a un proyecto de Supabase donde la tabla no
+existe (o la caché de PostgREST está desactualizada). Casi siempre pasa porque:
+
+1. El SQL se ejecutó en **otro proyecto** distinto al que usa Vercel. La
+   integración de Vercel puede crear o enlazar un proyecto nuevo.
+2. Nunca se ejecutó `schema.sql` en el proyecto enlazado.
+
+Diagnóstico rápido: abre `https://TU-APP.vercel.app/api/health`. Devuelve el
+host del proyecto conectado, qué variables están configuradas y qué tablas
+faltan.
+
+Para confirmar el proyecto, ejecuta esto en el SQL Editor del proyecto donde
+crees que están las tablas:
+
+```sql
+select current_database();
+select table_name
+from information_schema.tables
+where table_schema = 'public'
+  and table_name in ('attendees', 'orders', 'event_settings');
+```
+
+Si no aparecen las tres tablas, ejecuta `schema.sql` en ese mismo SQL Editor.
+Si aparecen pero la API sigue fallando, ejecuta:
+
+```sql
+notify pgrst, 'reload schema';
+```
+
+Finalmente, revisa en Vercel > Settings > Environment Variables que
+`NEXT_PUBLIC_SUPABASE_URL` apunte al **mismo** proyecto (compara el subdominio
+`xxxxx.supabase.co`) y vuelve a desplegar.
+
 ## Paso 4: Desplegar
 
 ### En Cloudflare Pages

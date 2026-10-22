@@ -30,6 +30,25 @@ const FALLBACK_SETTINGS: EventSettings = {
   currency: 'S/',
 }
 
+function describeCameraError(error: unknown) {
+  const e = error as { name?: string; message?: string }
+  const name = e?.name || ''
+
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+    return 'Permiso de cámara bloqueado para este sitio. Pulsa el candado junto a la URL y elige "Permitir", luego recarga. En iPhone: Ajustes > Safari > Cámara > Permitir.'
+  }
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return 'No se encontró ninguna cámara conectada a este dispositivo.'
+  }
+  if (name === 'NotReadableError' || name === 'TrackStartError') {
+    return 'La cámara está siendo usada por otra aplicación (Zoom, Meet, otra pestaña). Ciérrala y vuelve a intentar.'
+  }
+  if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+    return 'La cámara disponible no es compatible. Prueba con otra cámara o desde otro navegador.'
+  }
+  return e?.message?.trim() || 'No se pudo iniciar la cámara. Revisa los permisos del sitio e inténtalo de nuevo.'
+}
+
 function formatEventDate(value: string, options: Intl.DateTimeFormatOptions) {
   try {
     const date = new Date(`${value}T12:00:00`)
@@ -54,16 +73,20 @@ export default function Page() {
   const [confirming, setConfirming] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [setupError, setSetupError] = useState<string | null>(null)
 
   const fetchAttendees = async () => {
     try {
-      const res = await fetch('/api/attendees')
-      const data = await res.json()
-      if (data.attendees) {
-        setAttendees(data.attendees)
+      const res = await fetch('/api/attendees', { cache: 'no-store' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.error) {
+        setSetupError(data.error || `El servidor respondió con estado ${res.status}.`)
+        return
       }
+      setSetupError(null)
+      setAttendees(data.attendees || [])
     } catch (e) {
-      // ignore
+      setSetupError('No se pudo conectar con el servidor.')
     } finally {
       setLoading(false)
     }
@@ -290,6 +313,19 @@ export default function Page() {
           </header>
 
           <div className="p-5 sm:p-8">
+            {setupError && (
+              <div className="mx-auto mb-6 max-w-[1120px] rounded-2xl border border-[#e6b8a2] bg-[#fff3ea] p-4 text-sm">
+                <p className="font-bold text-[#8a3f12]">No se pudo cargar la base de datos</p>
+                <p className="mt-1 break-words text-[#7a5a45]">{setupError}</p>
+                <p className="mt-2 text-[#7a5a45]">
+                  Abre{' '}
+                  <a className="font-semibold underline" href="/api/health" target="_blank" rel="noreferrer">
+                    /api/health
+                  </a>{' '}
+                  para ver a qué proyecto de Supabase está conectado Vercel y qué tablas faltan.
+                </p>
+              </div>
+            )}
             {loading && view === 'inicio' && <div className="mx-auto max-w-[1120px] text-[#756c78]">Cargando...</div>}
             {view === 'inicio' && !loading && (
               <Dashboard stats={stats} settings={settings} onScan={() => setView('escanear')} onPurchase={openPurchase} />
@@ -681,6 +717,7 @@ function Scanner({
   onClear: () => void
 }) {
   const reader = useRef<Html5Qrcode | null>(null)
+  const starting = useRef(false)
   const lastScan = useRef<{ code: string; at: number } | null>(null)
   const resultRef = useRef<Result>(scanResult)
   const [cameraError, setCameraError] = useState<string | null>(null)
@@ -691,73 +728,96 @@ function Scanner({
     resultRef.current = scanResult
   }, [scanResult])
 
+  const stopScanner = async () => {
+    const scanner = reader.current
+    reader.current = null
+    if (!scanner) return
+    try {
+      if (scanner.isScanning) await scanner.stop()
+    } catch {
+      // La cámara pudo haberse cerrado ya.
+    }
+    try {
+      scanner.clear()
+    } catch {
+      // ignore
+    }
+  }
+
   const startScanner = async () => {
+    if (starting.current) return
+    starting.current = true
     setCameraError(null)
     setCameraReady(false)
     setRequested(true)
-    try {
-      if (typeof navigator !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
-        stream.getTracks().forEach((t) => t.stop())
-      } else {
-        throw new Error('Este navegador no soporta acceso a cámara')
-      }
-    } catch (e: any) {
-      setCameraError(e?.name === 'NotAllowedError' ? 'Permiso de cámara denegado. Actívalo en la configuración del navegador.' : e?.message || 'No se pudo acceder a la cámara')
-      return
-    }
 
     try {
+      // Libera una instancia anterior antes de volver a pedir la cámara.
+      await stopScanner()
+
+      if (typeof window !== 'undefined' && !window.isSecureContext) {
+        throw new Error(
+          'La cámara solo funciona en HTTPS. Abre la URL de Vercel (https://...) o http://localhost; no uses una IP por HTTP.'
+        )
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Este navegador no permite acceder a la cámara.')
+      }
+
+      // El contenedor debe estar visible antes de arrancar el lector.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      )
+
       const scanner = new Html5Qrcode('qr-reader')
       reader.current = scanner
-      await scanner.start(
-        { facingMode: { ideal: 'environment' } },
-        {
-          fps: 10,
-          qrbox: (viewfinderWidth, viewfinderHeight) => {
-            const minEdge = Math.min(viewfinderWidth, viewfinderHeight)
-            const size = Math.floor(minEdge * 0.7)
-            return { width: size, height: size }
-          },
+
+      const config = {
+        fps: 10,
+        qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
+          const minEdge = Math.min(viewfinderWidth, viewfinderHeight)
+          const size = Math.floor(minEdge * 0.7)
+          return { width: size, height: size }
         },
-        (decoded) => {
-          // Mientras hay un resultado en pantalla no seguimos validando el
-          // mismo QR. El operador debe pulsar "Limpiar" para el siguiente.
-          if (resultRef.current) return
-          const now = Date.now()
-          if (lastScan.current && lastScan.current.code === decoded && now - lastScan.current.at < 3000) return
-          lastScan.current = { code: decoded, at: now }
-          onScan(decoded)
-        },
-        () => {}
-      )
+      }
+
+      const onDecoded = (decoded: string) => {
+        // Mientras hay un resultado en pantalla no seguimos validando el
+        // mismo QR. El operador debe pulsar "Limpiar" para el siguiente.
+        if (resultRef.current) return
+        const now = Date.now()
+        if (lastScan.current && lastScan.current.code === decoded && now - lastScan.current.at < 3000) return
+        lastScan.current = { code: decoded, at: now }
+        onScan(decoded)
+      }
+
+      try {
+        await scanner.start({ facingMode: 'environment' }, config, onDecoded, () => {})
+      } catch (firstError) {
+        // Portátiles o cámaras sin "environment": usa la que exista.
+        await stopScanner()
+        const cameras = await Html5Qrcode.getCameras().catch(() => [])
+        if (!cameras.length) throw firstError
+        const retry = new Html5Qrcode('qr-reader')
+        reader.current = retry
+        await retry.start(cameras[cameras.length - 1].id, config, onDecoded, () => {})
+      }
+
       setCameraReady(true)
-    } catch (e: any) {
-      setCameraError(e?.message || 'Error al iniciar el lector de cámara')
+    } catch (e) {
+      await stopScanner()
+      setCameraError(describeCameraError(e))
+    } finally {
+      starting.current = false
     }
   }
 
   useEffect(() => {
     return () => {
-      ;(async () => {
-        try {
-          const r = reader.current
-          if (r) {
-            const maybe = (r as any).isScanning
-            if (maybe) {
-              try {
-                await (r as any).stop()
-              } catch (e) {}
-            }
-            try {
-              await (r as any).clear()
-            } catch (e) {}
-          }
-        } catch (e) {
-          // ignore
-        }
-      })()
+      void stopScanner()
     }
+    // Solo al desmontar.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const panelTone =
@@ -788,7 +848,7 @@ function Scanner({
           <div className="flex items-center justify-between">
             <h3 className="font-bold">Lector de cámara</h3>
             <span className={`rounded-full px-3 py-1 text-xs font-bold ${cameraReady ? 'bg-[#315f42]' : cameraError ? 'bg-[#7c2d12]' : requested ? 'bg-[#6b7280]' : 'bg-[#5f2d83]'}`}>
-              {cameraReady ? 'Activo' : cameraError ? 'Sin permiso' : requested ? 'Solicitando...' : 'Requiere permiso'}
+              {cameraReady ? 'Activo' : cameraError ? 'Error' : requested ? 'Solicitando...' : 'Requiere permiso'}
             </span>
           </div>
 
