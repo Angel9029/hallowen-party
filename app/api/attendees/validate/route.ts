@@ -1,34 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-server'
+import { normalizeAttendee } from '@/lib/event-settings'
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { code } = body
+    const code = String(body.code ?? '').trim().toUpperCase()
 
-    if (!code || !code.trim()) {
-      return NextResponse.json({ valid: false, error: 'Code is required' }, { status: 400 })
+    if (!code) {
+      return NextResponse.json({ valid: false, reason: 'missing_code' }, { status: 400 })
     }
 
     const { data, error } = await supabaseAdmin
       .from('attendees')
       .select('*')
-      .eq('id', code.trim().toUpperCase())
-      .single()
+      .eq('id', code)
+      .maybeSingle()
 
-    if (error || !data) {
-      return NextResponse.json({ valid: false }, { status: 200 })
+    if (error) throw error
+
+    if (!data) {
+      return NextResponse.json({ valid: false, reason: 'not_found' }, { status: 200 })
     }
 
-    if (!data.paid) {
-      return NextResponse.json({ valid: false, reason: 'not_paid', attendee: data }, { status: 200 })
+    const attendee = normalizeAttendee(data)
+
+    if (!attendee.paid) {
+      return NextResponse.json({ valid: false, reason: 'not_paid', attendee }, { status: 200 })
     }
 
-    if (data.used) {
-      return NextResponse.json({ valid: false, reason: 'already_used', attendee: data }, { status: 200 })
+    if (attendee.used) {
+      return NextResponse.json({ valid: false, reason: 'already_used', attendee }, { status: 200 })
     }
 
-    return NextResponse.json({ valid: true, attendee: data }, { status: 200 })
+    return NextResponse.json({ valid: true, attendee }, { status: 200 })
   } catch (error: any) {
     return NextResponse.json({ valid: false, error: error.message }, { status: 500 })
   }
