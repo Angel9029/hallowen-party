@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import {
   Ban,
   CalendarDays,
+  CircleDollarSign,
   FileDown,
   Ghost,
   Loader2,
@@ -34,6 +35,9 @@ type Props = {
   onCancel: (group: PurchaseGroup) => void
   onDownload: (group: PurchaseGroup) => void
   downloadingKey: string | null
+  onPayGroup: (group: PurchaseGroup, action: 'mark_paid_pending' | 'mark_paid_all') => void
+  onPayTicket: (ticket: Attendee, group: PurchaseGroup) => void
+  payingKey: string | null
 }
 
 export function PurchasesList({
@@ -47,6 +51,9 @@ export function PurchasesList({
   onCancel,
   onDownload,
   downloadingKey,
+  onPayGroup,
+  onPayTicket,
+  payingKey,
 }: Props) {
   const [showCancelled, setShowCancelled] = useState(false)
 
@@ -197,12 +204,44 @@ export function PurchasesList({
                     </p>
                     <div className="flex flex-wrap gap-2">
                       {group.orderId && !cancelled && (
-                        <button
-                          onClick={() => onEdit(group)}
-                          className="flex items-center gap-1.5 rounded-lg border border-[#ded7d1] bg-white px-2.5 py-1.5 text-xs font-bold text-[#5f2d83] transition hover:bg-[#f0e9f4]"
-                        >
-                          <Pencil className="size-3.5" /> Editar
-                        </button>
+                        <>
+                          {group.paidCount < group.tickets.length && (
+                            <>
+                              {group.paidCount > 0 && (
+                                <button
+                                  onClick={() => onPayGroup(group, 'mark_paid_pending')}
+                                  disabled={payingKey === group.key}
+                                  className="flex items-center gap-1.5 rounded-lg border border-[#b9e6c9] bg-[#f1fbf5] px-2.5 py-1.5 text-xs font-bold text-[#2e8a54] transition hover:bg-[#e5f7ec] disabled:opacity-60"
+                                >
+                                  {payingKey === group.key ? (
+                                    <Loader2 className="size-3.5 animate-spin" />
+                                  ) : (
+                                    <CircleDollarSign className="size-3.5" />
+                                  )}
+                                  Marcar pendientes como pagados
+                                </button>
+                              )}
+                              <button
+                                onClick={() => onPayGroup(group, 'mark_paid_all')}
+                                disabled={payingKey === group.key}
+                                className="flex items-center gap-1.5 rounded-lg border border-[#ded7d1] bg-white px-2.5 py-1.5 text-xs font-bold text-[#5f2d83] transition hover:bg-[#f0e9f4] disabled:opacity-60"
+                              >
+                                {payingKey === group.key ? (
+                                  <Loader2 className="size-3.5 animate-spin" />
+                                ) : (
+                                  <CircleDollarSign className="size-3.5" />
+                                )}
+                                Marcar todo pagado
+                              </button>
+                            </>
+                          )}
+                          <button
+                            onClick={() => onEdit(group)}
+                            className="flex items-center gap-1.5 rounded-lg border border-[#ded7d1] bg-white px-2.5 py-1.5 text-xs font-bold text-[#5f2d83] transition hover:bg-[#f0e9f4]"
+                          >
+                            <Pencil className="size-3.5" /> Editar
+                          </button>
+                        </>
                       )}
                       <button
                         onClick={() => onDownload(group)}
@@ -246,16 +285,18 @@ export function PurchasesList({
                           : 'bg-[#fff8d8] text-[#a68300]'
 
                     return (
-                      <button
+                      <div
                         key={ticket.id}
-                        onClick={() => onQr(ticket)}
-                        className="flex items-center justify-between gap-3 rounded-xl border border-[#eee3d5] bg-white px-3 py-2.5 text-left transition hover:border-[#5f2d83]/40 hover:shadow-sm"
-                        title="Ver QR"
+                        className="flex items-center justify-between gap-3 rounded-xl border border-[#eee3d5] bg-white px-3 py-2.5"
                       >
-                        <span className="flex min-w-0 items-center gap-2">
+                        <button
+                          onClick={() => onQr(ticket)}
+                          className="flex min-w-0 items-center gap-2 text-left transition hover:opacity-80"
+                          title="Ver QR"
+                        >
                           <QrCode className="size-4 shrink-0 text-[#5f2d83]" />
                           <span className="truncate text-sm font-bold text-[#5f2d83]">{ticket.id}</span>
-                        </span>
+                        </button>
                         <span className="flex shrink-0 items-center gap-2">
                           <span className="text-xs text-[#8a808c]">
                             {settings.currency} {Number(ticket.unit_price ?? settings.price).toFixed(2)}
@@ -263,8 +304,18 @@ export function PurchasesList({
                           <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ticketClass}`}>
                             {ticketStatus}
                           </span>
+                          {!cancelled && !ticket.used && !ticket.paid && group.orderId && (
+                            <button
+                              onClick={() => onPayTicket(ticket, group)}
+                              disabled={payingKey === ticket.id}
+                              className="rounded-full bg-[#2e8a54] px-2.5 py-0.5 text-[10px] font-bold text-white transition hover:bg-[#257646] disabled:opacity-60"
+                              title="Marcar esta entrada como pagada"
+                            >
+                              {payingKey === ticket.id ? <Loader2 className="size-3 animate-spin" /> : 'Pagar'}
+                            </button>
+                          )}
                         </span>
-                      </button>
+                      </div>
                     )
                   })}
                 </div>

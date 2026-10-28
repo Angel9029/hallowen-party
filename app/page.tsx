@@ -58,6 +58,7 @@ export default function Page() {
   const [editingGroup, setEditingGroup] = useState<PurchaseGroup | null>(null)
   const [cancellingGroup, setCancellingGroup] = useState<PurchaseGroup | null>(null)
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null)
+  const [payingKey, setPayingKey] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [scanCode, setScanCode] = useState('')
   const [scanResult, setScanResult] = useState<Result>(null)
@@ -287,6 +288,52 @@ export default function Page() {
     await fetchAttendees()
   }
 
+  async function handlePayGroup(group: PurchaseGroup, action: 'mark_paid_pending' | 'mark_paid_all') {
+    if (!group.orderId) return
+    setPayingKey(group.key)
+    try {
+      const res = await fetch(`/api/purchases/${encodeURIComponent(group.orderId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'No se pudo actualizar el pago')
+      await fetchAttendees()
+      setNotice({
+        tone: 'success',
+        message:
+          action === 'mark_paid_pending'
+            ? 'Entradas pendientes marcadas como pagadas.'
+            : 'Toda la compra fue marcada como pagada.',
+      })
+    } catch (e: any) {
+      setNotice({ tone: 'error', message: e?.message || 'No se pudo actualizar el pago' })
+    } finally {
+      setPayingKey(null)
+    }
+  }
+
+  async function handlePayTicket(ticket: Attendee, group: PurchaseGroup) {
+    if (!group.orderId) return
+    setPayingKey(ticket.id)
+    try {
+      const res = await fetch(`/api/purchases/${encodeURIComponent(group.orderId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'mark_ticket_paid', ticketId: ticket.id }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'No se pudo marcar como pagada')
+      await fetchAttendees()
+      setNotice({ tone: 'success', message: `${ticket.id} marcado como pagado.` })
+    } catch (e: any) {
+      setNotice({ tone: 'error', message: e?.message || 'No se pudo marcar como pagada' })
+    } finally {
+      setPayingKey(null)
+    }
+  }
+
   function handleNavClick(nextView: View) {
     setView(nextView)
     setMobileMenuOpen(false)
@@ -423,6 +470,9 @@ export default function Page() {
                 onCancel={setCancellingGroup}
                 onDownload={downloadPurchase}
                 downloadingKey={downloadingKey}
+                onPayGroup={handlePayGroup}
+                onPayTicket={handlePayTicket}
+                payingKey={payingKey}
               />
             )}
 
